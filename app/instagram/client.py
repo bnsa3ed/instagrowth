@@ -117,11 +117,11 @@ class InstagramClient:
         return list(self._paged(f"{self.ig_user_id}/media", **params))
 
     def get_media_insights(self, media_id: str, media_type: str) -> dict[str, int]:
-        # `reach/likes/comments/saved/shares` are valid for all media types. `views`/`plays`
-        # are only valid for VIDEO/REELS and vary by API path → tried separately, non-fatal.
+        # `views` IS valid on the IG Login path (the 400 only rejected `plays`). Try the full
+        # set first; if a media type still rejects `views`, fall back without it.
+        full = "reach,likes,comments,saved,shares,views"
         baseline = "reach,likes,comments,saved,shares"
-        extra = "views,plays" if (media_type or "").upper() in ("REELS", "VIDEO") else ""
-        for metrics in filter(None, [f"{baseline},{extra}" if extra else None, baseline]):
+        for metrics in [full, baseline]:
             try:
                 body = self._get(f"{media_id}/insights", metric=metrics)
             except httpx.HTTPStatusError as exc:
@@ -132,7 +132,7 @@ class InstagramClient:
                     detail = exc.response.text[:200]
                 log.warning("media insights %s/%s → %s; %s",
                             media_id, metrics, exc.response.status_code, detail)
-                continue  # fall back to baseline set
+                continue  # fall back to the smaller set
             except httpx.HTTPError as exc:
                 log.warning("media insights failed for %s: %s", media_id, exc)
                 return {}

@@ -29,6 +29,13 @@ SELF_CHECK_TOL = 0.10  # ±10% on engagement_rate_avg
 
 
 def _load_inputs(ig_user_id: str) -> tuple[dict, float]:
+    # Refresh the weekly_summary rollup so avg_engagement_rate reflects the just-synced media.
+    try:
+        with get_cursor(commit=True) as cur:
+            cur.execute("REFRESH MATERIALIZED VIEW weekly_summary")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("weekly_summary refresh failed (continuing with stale view): %s", exc)
+
     with get_cursor(commit=False) as cur:
         cur.execute(
             """SELECT ig_user_id, niche, brand_voice, taboos
