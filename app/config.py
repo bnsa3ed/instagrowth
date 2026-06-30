@@ -5,10 +5,16 @@ this module reads them from the environment / `.env`.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Silence HTTP clients that log full URLs (the Telegram bot token is in the URL).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("google_genai").setLevel(logging.WARNING)
 
 
 class Settings(BaseSettings):
