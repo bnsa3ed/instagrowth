@@ -117,25 +117,33 @@ class InstagramClient:
         return list(self._paged(f"{self.ig_user_id}/media", **params))
 
     def get_media_insights(self, media_id: str, media_type: str) -> dict[str, int]:
-        # Reels/video use different metric names than image/carousel.
-        if media_type in ("REELS", "VIDEO"):
-            metrics = "reach,views,likes,comments,saved,shares,plays"
-        elif media_type == "CAROUSEL_ALBUM":
-            metrics = "reach,views,likes,comments,saved,shares"
-        else:
-            metrics = "reach,views,likes,comments,saved,shares"
-        try:
-            body = self._get(f"{media_id}/insights", metric=metrics)
-        except httpx.HTTPError as exc:
-            log.warning("media insights failed for %s: %s", media_id, exc)
-            return {}
-        flat: dict[str, int] = {}
-        for entry in body.get("data", []):
-            name = entry.get("name")
-            values = entry.get("values") or []
-            if name and values:
-                flat[name] = values[-1].get("value", 0)
-        return flat
+        # `reach/likes/comments/saved/shares` are valid for all media types. `views`/`plays`
+        # are only valid for VIDEO/REELS and vary by API path → tried separately, non-fatal.
+        baseline = "reach,likes,comments,saved,shares"
+        extra = "views,plays" if (media_type or "").upper() in ("REELS", "VIDEO") else ""
+        for metrics in filter(None, [f"{baseline},{extra}" if extra else None, baseline]):
+            try:
+                body = self._get(f"{media_id}/insights", metric=metrics)
+            except httpx.HTTPStatusError as exc:
+                detail = ""
+                try:
+                    detail = exc.response.json()
+                except Exception:  # noqa: BLE001
+                    detail = exc.response.text[:200]
+                log.warning("media insights %s/%s → %s; %s",
+                            media_id, metrics, exc.response.status_code, detail)
+                continue  # fall back to baseline set
+            except httpx.HTTPError as exc:
+                log.warning("media insights failed for %s: %s", media_id, exc)
+                return {}
+            flat: dict[str, int] = {}
+            for entry in body.get("data", []):
+                name = entry.get("name")
+                values = entry.get("values") or []
+                if name and values:
+                    flat[name] = values[-1].get("value", 0)
+            return flat
+        return {}
 
     # ── Business Discovery (competitor top media — used by US2) ──────────────────
     def business_discovery(self, username: str, limit: int = 10) -> dict:

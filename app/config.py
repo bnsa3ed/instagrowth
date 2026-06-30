@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     gemini_model_primary: str = Field("gemini-3.5-flash")
     gemini_model_fallback: str = Field("gemini-3.1-flash-lite")
 
+    # ── Z.ai / ZhipuAI (GLM) — primary LLM (OpenAI-compatible) ──────────────────
+    glm_api_key: str = Field("", description="Z.ai / ZhipuAI API key")
+    glm_base_url: str = Field("https://api.z.ai/api/paas/v4")
+    glm_model: str = Field("glm-5.2")
+    # Per-1M-token pricing (0.0 = flat plan, e.g. Z.ai Coding). Set for pay-as-you-go.
+    glm_price_input_per_1m: float = Field(0.0)
+    glm_price_output_per_1m: float = Field(0.0)
+
+    # ── Provider routing ─────────────────────────────────────────────────────────
+    # Gemini primary: #1 in Arabic (SILMA 02/2026), native Masri dialect + structured output
+    # + Grounding. GLM-5.2 is #2 in Arabic but weaker at dialect/colloquialisms → strong fallback.
+    ai_provider_primary: str = Field("gemini", description="gemini | glm (Z.ai)")
+    ai_provider_fallback: str = Field("glm")
+
     # ── Telegram + Email ─────────────────────────────────────────────────────────
     telegram_bot_token: str = Field("")
     telegram_chat_id: str = Field("")
@@ -59,7 +73,8 @@ class Settings(BaseSettings):
     @property
     def is_configured(self) -> bool:
         """True if the minimum secrets for a live run are present."""
-        return bool(self.supabase_db_url and self.meta_token and self.ig_user_id and self.gemini_api_key)
+        return bool(self.supabase_db_url and self.meta_token and self.ig_user_id
+                    and (self.glm_api_key or self.gemini_api_key))
 
 
 @lru_cache

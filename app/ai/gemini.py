@@ -1,12 +1,17 @@
-"""Gemini (google-genai) wrapper — structured output, fallback model, cost tracking.
+"""Unified LLM client — GLM-5.2 via Z.ai (primary) with Gemini fallback.
 
-- Primary: `gemini-3.5-flash`. Fallback: `gemini-3.1-flash-lite` on error/timeout.
-- Structured output validated against a Pydantic model (`response_schema`).
+- Primary: `glm-5.2` on the Z.ai OpenAI-compatible endpoint (`openai` SDK).
+- Fallback: `gemini-3.5-flash` via `google-genai` if the primary errors.
+- Structured output validated against a Pydantic model (JSON mode + validation).
 - Per-call token cost returned to the caller → written to `pipeline_runs.meta`.
-- Weekly-report path: engagement-rate self-check (±10% vs DB value); flag on drift.
+
+Public API (unchanged): `generate_structured()`, `AIResult`, `load_prompt()`.
+Note: module is named `gemini.py` for import compatibility; it now routes to GLM first.
+Grounding (Google Search) stays Gemini-only — see app/ai/grounding.py.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +23,7 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
-# Pricing per 1M tokens (plan §7.1). Used for cost tracking / monthly cap.
+# Gemini pricing per 1M tokens (plan §7.1). GLM pricing comes from settings (flat plan = 0).
 PRICE_PER_1M = {
     "gemini-3.5-flash": {"input": 1.50, "output": 9.00},
     "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
@@ -39,20 +44,17 @@ class AIResult(Generic[T]):
     used_fallback: bool
 
 
-def _cost(model: str, in_tok: int, out_tok: int) -> float:
-    price = PRICE_PER_1M.get(model, {"input": 1.50, "output": 9.00})
-    return round((in_tok / 1_000_000) * price["input"] + (out_tok / 1_000_000) * price["output"], 6)
-
-
 def load_prompt(name: str) -> str:
     """Load a versioned prompt file from prompts/."""
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
-def _client():
-    """Lazily build the google-genai client. Import kept local so missing dep won't crash import."""
-    from google import genai  # type: ignore
-    return genai.Client(api_key=settings.gemini_api_key)
+def _cost(model: str, in_tok: int, out_tok: int) -> float:
+    if model == settings.glm_model:
+        return round((in_tok / 1_000_000) * settings.glm_price_input_per_1m
+                     + (out_tok / 1_000_000) * settings.glm_price_output_per_1m, 6)
+    price = PRICE_PER_1M.get(model, {"input": 1.50, "output": 9.00})
+    return round((in_tok / 1_000_000) * price["input"] + (out_tok / 1_000_000) * price["output"], 6)
 
 
 def generate_structured(
@@ -60,76 +62,98 @@ def generate_structured(
     user_payload: str,
     model_cls: Type[T],
     *,
-    model: str | None = None,
-    fallback: str | None = None,
+    provider: str | None = None,
+    fallback_provider: str | None = None,
 ) -> AIResult[T]:
-    """Generate structured output validated against `model_cls`; retry once on the fallback model.
-
-    `user_payload` should be a JSON string of the inputs referenced by the prompt.
-    """
-    primary = model or settings.gemini_model_primary
-    secondary = fallback or settings.gemini_model_fallback
+    """Generate structured output validated against `model_cls`; try fallback provider on failure."""
+    primary = provider or settings.ai_provider_primary
+    secondary = fallback_provider or settings.ai_provider_fallback
+    providers = [primary] + ([secondary] if secondary and secondary != primary else [])
 
     last_exc: Exception | None = None
-    for idx, mdl in enumerate([primary, secondary]):
-        used_fb = idx == 1
+    for idx, prov in enumerate(providers):
+        used_fb = idx > 0
         try:
-            return _call(mdl, system_prompt, user_payload, model_cls, used_fb)
+            res = _dispatch(prov, system_prompt, user_payload, model_cls)
+            res.used_fallback = used_fb
+            return res
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            log.warning("Gemini call failed on %s: %s — trying fallback", mdl, exc)
-    raise RuntimeError(f"Gemini structured generation failed: {last_exc}")
+            log.warning("AI provider %s failed: %s — trying fallback", prov, exc)
+    raise RuntimeError(f"AI structured generation failed on all providers: {last_exc}")
 
 
-def _call(mdl: str, system_prompt: str, user_payload: str,
-          model_cls: Type[T], used_fallback: bool) -> AIResult[T]:
-    client = _client()
-    # google-genai supports passing a Pydantic class as response_schema / config.
-    config = {"response_mime_type": "application/json"}
-    try:  # response_schema support varies by SDK version
-        from google.genai import types  # type: ignore
-        schema = types.Schema(**_pydantic_to_schema(model_cls)) if False else model_cls
-        config["response_schema"] = model_cls
-    except Exception:  # noqa: BLE001
-        pass
+def _dispatch(prov: str, system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIResult[T]:
+    if prov == "glm":
+        return _call_glm(system_prompt, user_payload, model_cls)
+    return _call_gemini(system_prompt, user_payload, model_cls)
 
+
+def _strip_fences(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t.lower().startswith("json"):
+            t = t[4:]
+    return t.strip()
+
+
+def _call_glm(system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIResult[T]:
+    """GLM-5.2 via Z.ai (OpenAI-compatible)."""
+    from openai import OpenAI  # type: ignore
+
+    client = OpenAI(api_key=settings.glm_api_key, base_url=settings.glm_base_url)
+    schema = json.dumps(model_cls.model_json_schema(), ensure_ascii=False)
+    messages = [
+        {"role": "system", "content": f"{system_prompt}\n\nReturn ONLY valid JSON "
+                                      f"(no markdown fences) matching this exact schema:\n{schema}"},
+        {"role": "user", "content": user_payload},
+    ]
+    resp = client.chat.completions.create(
+        model=settings.glm_model,
+        messages=messages,
+        response_format={"type": "json_object"},
+        temperature=0.3,
+    )
+    text = _strip_fences(resp.choices[0].message.content or "")
+    data = model_cls.model_validate_json(text)
+    usage = resp.usage
+    in_tok = getattr(usage, "prompt_tokens", 0) or 0
+    out_tok = getattr(usage, "completion_tokens", 0) or 0
+    return AIResult(data=data, model=settings.glm_model, input_tokens=in_tok,
+                    output_tokens=out_tok, cost_usd=_cost(settings.glm_model, in_tok, out_tok),
+                    used_fallback=False)
+
+
+def _client():
+    """google-genai client (Gemini fallback + Grounding)."""
+    from google import genai  # type: ignore
+    return genai.Client(api_key=settings.gemini_api_key)
+
+
+def _call_gemini(system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIResult[T]:
+    """Gemini fallback via google-genai (structured output via response_schema)."""
     from google.genai import types  # type: ignore
+    client = _client()
     response = client.models.generate_content(
-        model=mdl,
+        model=settings.gemini_model_primary,
         contents=user_payload,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
-            **config,
+            response_mime_type="application/json",
+            response_schema=model_cls,
         ),
     )
     usage = getattr(response, "usage_metadata", None)
     in_tok = getattr(usage, "prompt_token_count", 0) or 0
     out_tok = getattr(usage, "candidates_token_count", 0) or 0
-
-    data = _parse(response, model_cls)
-    return AIResult(
-        data=data,
-        model=mdl,
-        input_tokens=in_tok,
-        output_tokens=out_tok,
-        cost_usd=_cost(mdl, in_tok, out_tok),
-        used_fallback=used_fb,
-    )
-
-
-def _parse(response, model_cls: Type[T]) -> T:
-    text = getattr(response, "text", None) or ""
+    text = _strip_fences(getattr(response, "text", "") or "")
     if not text:
-        # Try first candidate part text.
         try:
             text = response.candidates[0].content.parts[0].text
         except Exception:  # noqa: BLE001
             text = ""
-    if not text:
-        raise RuntimeError("Gemini returned empty content")
-    return model_cls.model_validate_json(text)
-
-
-def _pydantic_to_schema(model_cls: Type[BaseModel]) -> dict:
-    """Fallback JSON-schema (unused unless response_schema needs a raw dict)."""
-    return model_cls.model_json_schema()
+    data = model_cls.model_validate_json(text)
+    return AIResult(data=data, model=settings.gemini_model_primary, input_tokens=in_tok,
+                    output_tokens=out_tok, cost_usd=_cost(settings.gemini_model_primary, in_tok, out_tok),
+                    used_fallback=False)

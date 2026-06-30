@@ -14,6 +14,7 @@ dependencies = [
   "supabase>=2.5",
   "psycopg2-binary>=2.9",
   "google-genai>=0.3",
+  "openai>=1.40",
   "python-telegram-bot>=21.0",
   "feedparser>=6.0",
   "praw>=7.7",
