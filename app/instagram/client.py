@@ -144,3 +144,34 @@ class InstagramClient:
             fields="business_discovery.username(%s){media.limit(%d){id,like_count,comments_count,timestamp,caption,media_type,permalink}}"
             % (username, limit),
         )
+
+    # ── Content Publishing API (US5; scope: instagram_content_publish) ───────────
+    # create-container → publish. Supports image, carousel, AND Reels. Public media_url only.
+    def create_container(self, media_type: str, media_url: str, caption: str,
+                         children: list[str] | None = None, is_carousel_item: bool = False) -> str:
+        """Create a media container; returns its id. For carousls, build items then a parent."""
+        from app.utils.retry import post as retry_post
+        params: dict[str, Any] = {"caption": caption}
+        if media_type == "REELS":
+            params.update({"media_type": "REELS", "video_url": media_url})
+        elif media_type == "CAROUSEL_ALBUM":
+            params.update({"media_type": "CAROUSEL_ALBUM", "children": ",".join(children or [])})
+        elif is_carousel_item:
+            params.update({"image_url": media_url, "is_carousel_item": True})
+        else:
+            params.update({"image_url": media_url})
+
+        path = "media" if not is_carousel_item else "media"
+        body = retry_post(self._client, f"{self.base}/{self.ig_user_id}/{path}",
+                          data={"access_token": self.token, **params})
+        return body["id"]
+
+    def publish_container(self, container_id: str) -> str:
+        """Publish a created container; returns the published media_id."""
+        from app.utils.retry import post as retry_post
+        body = retry_post(
+            self._client,
+            f"{self.base}/{self.ig_user_id}/media_publish",
+            data={"creation_id": container_id, "access_token": self.token},
+        )
+        return body["id"]
