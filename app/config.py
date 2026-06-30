@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     ig_user_id: str = Field("", description="IG Business account id")
     meta_token: str = Field("", description="System User token (preferred, non-expiring)")
     ig_api_version: str = Field("v25.0", description="Graph API version")
+    # Facebook Login path → graph.facebook.com (System User token + Business Discovery).
+    # Instagram Login path → graph.instagram.com (60-day token; includes content_publish).
+    ig_api_host: str = Field("graph.facebook.com", description="graph.facebook.com or graph.instagram.com")
 
     # ── Google Gemini ────────────────────────────────────────────────────────────
     gemini_api_key: str = Field("")
@@ -50,8 +53,8 @@ class Settings(BaseSettings):
 
     @property
     def graph_base(self) -> str:
-        """Facebook Graph API base URL for the Facebook Login path."""
-        return f"https://graph.facebook.com/{self.ig_api_version}"
+        """Graph API base URL (facebook.com for FB Login path, instagram.com for IG Login path)."""
+        return f"https://{self.ig_api_host}/{self.ig_api_version}"
 
     @property
     def is_configured(self) -> bool:
