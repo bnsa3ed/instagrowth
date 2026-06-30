@@ -1,0 +1,25 @@
+# Instagrowth runtime — two services from one image:
+#   cron: supercronic reads scheduler/crontab and runs `python -m app.jobs.<name>`
+#   bot:  always-on Telegram bot for HITL approvals + notifications
+#
+# Secrets come from the host `.env` file (pydantic-settings reads them).
+#   cp .env.example .env  &&  fill in  &&  docker compose up -d
+
+services:
+  app:
+    build: .
+    image: instagrowth:latest
+    env_file: .env
+    restart: unless-stopped
+
+  cron:
+    image: instagrowth:latest
+    env_file: .env
+    restart: unless-stopped
+    command: ["supercronic", "/app/scheduler/crontab"]
+
+  bot:
+    image: instagrowth:latest
+    env_file: .env
+    restart: unless-stopped
+    command: ["python", "-m", "app.bot.hitl"]

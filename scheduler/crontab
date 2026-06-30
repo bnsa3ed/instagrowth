@@ -1,0 +1,35 @@
+# supercronic crontab — Instagrowth scheduled jobs.
+# Format: MIN HOUR DOM MON DOW  command
+# Times are evaluated in the container's local TZ; set ACCOUNT_TIMEZONE (and run
+# the container with that TZ) so "02:00" means 02:00 Africa/Cairo.
+# Edit the entry points as jobs are implemented; restart the `cron` service after.
+
+# ── Phase 3 / US1 (MVP) ───────────────────────────────────────────────────────
+# Daily profile + account insights + stories (stories expire in 24h — never miss).
+0 2 * * *       python -m app.jobs.daily_sync
+# Hourly token-health (refresh or alert when ≤7d to expiry).
+0 * * * *       python -m app.jobs.token_health
+# Weekly media deep-dive + Egyptian Arabic report (Sundays 06:00).
+0 6 * * 0       python -m app.jobs.weekly_report
+
+# ── Phase 4 / US2 — trends & topic ideation (Mon/Wed/Fri 08:00) ───────────────
+0 8 * * 1,3,5   python -m app.jobs.trend_scan
+30 8 * * 1,3,5  python -m app.jobs.topic_ideation
+# Quarterly competitor discovery refresh (also seed on first run).
+0 5 1 */3 *     python -m app.jobs.competitor_discovery
+# Daily topic backfill: set measured_engagement_rate for topics published ≥14d ago.
+0 3 * * *       python -m app.jobs.topic_backfill
+
+# ── Phase 5 / US3 — anomaly radar (runs after daily sync) ─────────────────────
+30 2 * * *      python -m app.jobs.anomaly_detect
+
+# ── Phase 6 / US4 — content engine ────────────────────────────────────────────
+# Best-time heatmap refresh + content drafting/repurpose run hourly on weekdays.
+0 9 * * *       python -m app.jobs.auto_draft
+0 10 * * *      python -m app.jobs.repurpose
+
+# ── Phase 8 — polish ──────────────────────────────────────────────────────────
+# Daily cost-guard (throttle non-essential AI at the monthly cap).
+15 0 * * *      python -m app.jobs.cost_guard
+# Weekly digest (Sundays 07:00, after the report).
+0 7 * * 0       python -m app.jobs.weekly_digest

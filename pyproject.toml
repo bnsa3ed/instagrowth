@@ -1,0 +1,41 @@
+[project]
+name = "instagrowth"
+version = "0.1.0"
+description = "Instagram AI Analyzer & Growth Engine — daily capture, Egyptian Arabic strategy reports, niche trend intelligence, and an idea-to-publish content engine."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Instagrowth" } }
+
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "supabase>=2.5",
+  "psycopg2-binary>=2.9",
+  "google-genai>=0.3",
+  "python-telegram-bot>=21.0",
+  "feedparser>=6.0",
+  "praw>=7.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.4",
+  "mypy>=1.10",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
