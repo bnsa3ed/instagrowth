@@ -147,6 +147,11 @@ def _run(run: PipelineRun) -> int:
 def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    ig_user_id = settings.ig_user_id
+    from app.utils.cost import is_ai_throttled
+    if is_ai_throttled(ig_user_id):
+        log.info("monthly AI cap reached — skipping auto-draft (cost throttle)")
+        return
     with run_context("auto_draft") as run:
         _run(run)
 
