@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
+from psycopg2.extras import Json
+
 from app.db.client import get_cursor
 
 log = logging.getLogger(__name__)
@@ -63,7 +65,7 @@ def finish_run(cur, run: PipelineRun, status: str | None = None, error: str | No
             status or run._status,
             run.api_calls_used,
             error,
-            run.meta or None,
+            Json(run.meta) if run.meta else None,
             run.run_id,
         ),
     )
