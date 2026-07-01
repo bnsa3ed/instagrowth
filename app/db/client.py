@@ -73,7 +73,8 @@ def upsert(cur, table: str, row: dict, conflict_cols: list[str], *, update: bool
     cols = list(row.keys())
     placeholders = ", ".join(["%s"] * len(cols))
     col_list = ", ".join(cols)
-    adapted = [Json(v) if isinstance(v, (dict, list)) else v for v in row.values()]
+    # dicts → jsonb via Json(); lists → psycopg2 adapts to a Postgres array (text[]) natively.
+    adapted = [Json(v) if isinstance(v, dict) else v for v in row.values()]
     conflict = ", ".join(conflict_cols)
 
     if update:
