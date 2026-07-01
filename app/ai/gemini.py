@@ -98,6 +98,38 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+def _extract_json(text: str) -> str:
+    """Tolerantly extract the first balanced {...} object (LLMs often add trailing braces/prose)."""
+    text = _strip_fences(text)
+    start = text.find("{")
+    if start < 0:
+        return text
+    depth = 0
+    in_str = esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text  # unbalanced — return as-is so validation gives a clear error
+
+
+def _validate(model_cls: Type[T], text: str) -> T:
+    return model_cls.model_validate_json(_extract_json(text))
+
+
 def _call_glm(system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIResult[T]:
     """GLM-5.2 via Z.ai (OpenAI-compatible)."""
     from openai import OpenAI  # type: ignore
@@ -116,7 +148,7 @@ def _call_glm(system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIRe
         temperature=0.3,
     )
     text = _strip_fences(resp.choices[0].message.content or "")
-    data = model_cls.model_validate_json(text)
+    data = _validate(model_cls, text)
     usage = resp.usage
     in_tok = getattr(usage, "prompt_tokens", 0) or 0
     out_tok = getattr(usage, "completion_tokens", 0) or 0
@@ -132,16 +164,21 @@ def _client():
 
 
 def _call_gemini(system_prompt: str, user_payload: str, model_cls: Type[T]) -> AIResult[T]:
-    """Gemini fallback via google-genai (structured output via response_schema)."""
+    """Gemini fallback via google-genai (JSON mode + Pydantic validation).
+
+    Uses response_mime_type=json_object with the schema in the system prompt (not response_schema,
+    which the Developer API rejects when a model field is dict[str,Any] / additionalProperties)."""
     from google.genai import types  # type: ignore
     client = _client()
+    schema = json.dumps(model_cls.model_json_schema(), ensure_ascii=False)
     response = client.models.generate_content(
         model=settings.gemini_model_primary,
         contents=user_payload,
         config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=f"{system_prompt}\n\nReturn ONLY valid JSON "
+                                f"(no markdown fences) matching this exact schema:\n{schema}",
             response_mime_type="application/json",
-            response_schema=model_cls,
+            temperature=0.3,
         ),
     )
     usage = getattr(response, "usage_metadata", None)
@@ -153,7 +190,7 @@ def _call_gemini(system_prompt: str, user_payload: str, model_cls: Type[T]) -> A
             text = response.candidates[0].content.parts[0].text
         except Exception:  # noqa: BLE001
             text = ""
-    data = model_cls.model_validate_json(text)
+    data = _validate(model_cls, text)
     return AIResult(data=data, model=settings.gemini_model_primary, input_tokens=in_tok,
                     output_tokens=out_tok, cost_usd=_cost(settings.gemini_model_primary, in_tok, out_tok),
                     used_fallback=False)

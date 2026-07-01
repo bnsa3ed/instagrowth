@@ -122,6 +122,7 @@ def _run(run: PipelineRun) -> int:
     with get_cursor(commit=True) as cur:
         for topic in topics:
             variants = ["A", "B"] if (topic.get("opportunity_score") or 0) >= HIGH_OPPORTUNITY else [None]
+            topic_written = 0
             for v in variants:
                 row = _build_variant(ig_user_id, topic, cfg, v, run)
                 if not row:
@@ -138,8 +139,10 @@ def _run(run: PipelineRun) -> int:
                     row,
                 )
                 written += 1
-            # Mark topic as drafted.
-            cur.execute("UPDATE topic_suggestions SET status='drafted' WHERE id=%s", (topic["id"],))
+                topic_written += 1
+            # Only advance the topic if at least one variant was produced.
+            if topic_written:
+                cur.execute("UPDATE topic_suggestions SET status='drafted' WHERE id=%s", (topic["id"],))
     run.add_meta(topics_drafted=len(topics), drafts_written=written)
     return written
 
